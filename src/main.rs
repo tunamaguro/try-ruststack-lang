@@ -63,32 +63,54 @@ fn parse_block<'src, 'a>(input: &'a [&'src str]) -> (Value<'src>, &'a [&'src str
     (Value::Block(tokens), words)
 }
 
+fn parse(line: & str) -> Vec<Value> {
+    let mut stack = vec![];
+    let input: Vec<_> = line.split(' ').collect();
+    let mut words = &input[..];
+    while let Some((&word, mut rest)) = words.split_first() {
+        if word == "{" {
+            // ブロックのパース
+            let value;
+            (value, rest) = parse_block(rest);
+            stack.push(value);
+        } else if let Ok(val) = word.parse::<i32>() {
+            // 数値のパース
+            stack.push(Value::Num(val));
+        } else {
+            // 演算子のパース
+            match word {
+                "+" => add(&mut stack),
+                "-" => sub(&mut stack),
+                "*" => mul(&mut stack),
+                "/" => div(&mut stack),
+                _ => unreachable!(),
+            }
+        }
+        words = rest;
+    }
+    println!("Stack: {stack:?}");
+
+    stack
+}
+
 fn main() {
     for line in std::io::stdin().lines().map_while(Result::ok) {
-        let mut stack = vec![];
-        let input: Vec<_> = line.split(' ').collect();
-        let mut words = &input[..];
-        while let Some((&word, mut rest)) = words.split_first() {
-            if word == "{" {
-                // ブロックのパース
-                let value;
-                (value, rest) = parse_block(rest);
-                stack.push(value);
-            } else if let Ok(val) = word.parse::<i32>() {
-                // 数値のパース
-                stack.push(Value::Num(val));
-            } else {
-                // 演算子のパース
-                match word {
-                    "+" => add(&mut stack),
-                    "-" => sub(&mut stack),
-                    "*" => mul(&mut stack),
-                    "/" => div(&mut stack),
-                    _ => unreachable!(),
-                }
-            }
-            words = rest;
-        }
-        println!("Stack: {stack:?}")
+        parse(&line);
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_group() {
+        assert_eq!(
+            parse("1 2 + { 3 4 }"),
+            vec![
+                Value::Num(3),
+                Value::Block(vec![Value::Num(3), Value::Num(4)])
+            ]
+        )
     }
 }
