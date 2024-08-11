@@ -1,8 +1,11 @@
+use std::collections::BTreeMap;
+
 #[derive(Debug, PartialEq, Eq, Clone)]
 enum Value<'src> {
     Num(i32),
     Op(&'src str),
     Block(Vec<Value<'src>>),
+    Sym(&'src str),
 }
 
 impl<'src> Value<'src> {
@@ -17,6 +20,20 @@ impl<'src> Value<'src> {
         match self {
             Self::Block(val) => val,
             _ => panic!("Value is not a block"),
+        }
+    }
+}
+
+struct Vm<'src> {
+    stack: Vec<Value<'src>>,
+    vars: BTreeMap<&'src str, Value<'src>>,
+}
+
+impl<'src> Vm<'src> {
+    fn new() -> Self {
+        Self {
+            stack: vec![],
+            vars: BTreeMap::new(),
         }
     }
 }
@@ -107,7 +124,7 @@ fn eval<'src>(code: Value<'src>, stack: &mut Vec<Value<'src>>) {
 }
 
 fn parse(line: &str) -> Vec<Value> {
-    let mut stack = vec![];
+    let mut vm = Vm::new();
     let input: Vec<_> = line.split(' ').collect();
     let mut words = &input[..];
     while let Some((&word, mut rest)) = words.split_first() {
@@ -115,21 +132,23 @@ fn parse(line: &str) -> Vec<Value> {
             // ブロックのパース
             let value;
             (value, rest) = parse_block(rest);
-            stack.push(value);
+            vm.stack.push(value);
         } else {
             // ブロックじゃないものはNumかOpであると仮定している
             let code = if let Ok(val) = word.parse::<i32>() {
                 Value::Num(val)
+            } else if word.starts_with('/') {
+                Value::Sym(word)
             } else {
                 Value::Op(word)
             };
-            eval(code, &mut stack);
+            eval(code, &mut vm.stack);
         }
         words = rest;
     }
-    println!("Stack: {stack:?}");
+    println!("Stack: {:?}", vm.stack);
 
-    stack
+    vm.stack
 }
 
 fn main() {
