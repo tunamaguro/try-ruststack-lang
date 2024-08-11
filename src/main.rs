@@ -38,29 +38,20 @@ impl<'src> Vm<'src> {
     }
 }
 
-fn add(stack: &mut Vec<Value>) {
-    let right = stack.pop().unwrap().as_num();
-    let left = stack.pop().unwrap().as_num();
-    stack.push(Value::Num(left + right))
+macro_rules! impl_op {
+    ($name:ident,$op:tt) => {
+        fn $name(stack: &mut Vec<Value>) {
+            let right = stack.pop().unwrap().as_num();
+            let left = stack.pop().unwrap().as_num();
+            stack.push(Value::Num((left $op right) ))
+        }
+    };
 }
 
-fn sub(stack: &mut Vec<Value>) {
-    let right = stack.pop().unwrap().as_num();
-    let left = stack.pop().unwrap().as_num();
-    stack.push(Value::Num(left - right))
-}
-
-fn mul(stack: &mut Vec<Value>) {
-    let right = stack.pop().unwrap().as_num();
-    let left = stack.pop().unwrap().as_num();
-    stack.push(Value::Num(left * right))
-}
-
-fn div(stack: &mut Vec<Value>) {
-    let right = stack.pop().unwrap().as_num();
-    let left = stack.pop().unwrap().as_num();
-    stack.push(Value::Num(left / right))
-}
+impl_op!(add, +);
+impl_op!(sub, -);
+impl_op!(mul, *);
+impl_op!(div, /);
 
 fn lt(stack: &mut Vec<Value>) {
     let right = stack.pop().unwrap().as_num();
@@ -164,8 +155,9 @@ fn parse(line: &str) -> Vec<Value> {
             // ブロックじゃないものはNumかOpであると仮定している
             let code = if let Ok(val) = word.parse::<i32>() {
                 Value::Num(val)
-            } else if word.starts_with('/') {
-                Value::Sym(word)
+            } else if let Some(var_name) = word.strip_prefix('/') {
+                // '/'を取り除いたものが変数名
+                Value::Sym(var_name)
             } else {
                 Value::Op(word)
             };
@@ -212,6 +204,14 @@ mod test {
         assert_eq!(
             parse("{ 1 0 + } { 100 } { -100 } if"),
             vec![Value::Num(100)]
+        )
+    }
+
+    #[test]
+    fn test_def() {
+        assert_eq!(
+            parse("/x 10 def /y 20 def { x y < } { x } { y } if"),
+            vec![Value::Num(10)]
         )
     }
 }
