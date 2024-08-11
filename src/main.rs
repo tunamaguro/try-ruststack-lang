@@ -62,25 +62,44 @@ fn div(stack: &mut Vec<Value>) {
     stack.push(Value::Num(left / right))
 }
 
-fn op_if(stack: &mut Vec<Value>) {
-    let false_branch = stack.pop().unwrap().to_block();
-    let true_branch = stack.pop().unwrap().to_block();
-    let cond_branch = stack.pop().unwrap().to_block();
+fn lt(stack: &mut Vec<Value>) {
+    let right = stack.pop().unwrap().as_num();
+    let left = stack.pop().unwrap().as_num();
+
+    stack.push(Value::Num(if left < right { 1 } else { 0 }))
+}
+
+fn op_if(vm: &mut Vm) {
+    let false_branch = vm.stack.pop().unwrap().to_block();
+    let true_branch = vm.stack.pop().unwrap().to_block();
+    let cond_branch = vm.stack.pop().unwrap().to_block();
 
     for code in cond_branch {
-        eval(code, stack);
+        eval(code, vm);
     }
 
-    let cond_result = stack.pop().unwrap().as_num();
+    let cond_result = vm.stack.pop().unwrap().as_num();
 
     if cond_result != 0 {
         for code in true_branch {
-            eval(code, stack);
+            eval(code, vm);
         }
     } else {
         for code in false_branch {
-            eval(code, stack);
+            eval(code, vm);
         }
+    }
+}
+
+fn op_def(vm: &mut Vm) {
+    let num = vm.stack.pop().unwrap();
+    let sym = vm.stack.pop().unwrap();
+
+    match sym {
+        Value::Sym(ident) => {
+            vm.vars.insert(ident, num);
+        }
+        _ => panic!("is not symbol"),
     }
 }
 
@@ -109,17 +128,25 @@ fn parse_block<'src, 'a>(input: &'a [&'src str]) -> (Value<'src>, &'a [&'src str
     (Value::Block(tokens), words)
 }
 
-fn eval<'src>(code: Value<'src>, stack: &mut Vec<Value<'src>>) {
+fn eval<'src>(code: Value<'src>, vm: &mut Vm<'src>) {
     match code {
         Value::Op(op) => match op {
-            "+" => add(stack),
-            "-" => sub(stack),
-            "*" => mul(stack),
-            "/" => div(stack),
-            "if" => op_if(stack),
-            _ => panic!("{op:?} could not be parsed"),
+            "+" => add(&mut vm.stack),
+            "-" => sub(&mut vm.stack),
+            "*" => mul(&mut vm.stack),
+            "/" => div(&mut vm.stack),
+            "<" => lt(&mut vm.stack),
+            "if" => op_if(vm),
+            "def" => op_def(vm),
+            _ => {
+                let val = vm
+                    .vars
+                    .get(op)
+                    .unwrap_or_else(|| panic!("{op:?} is not a defined operation"));
+                vm.stack.push(val.clone());
+            }
         },
-        _ => stack.push(code.clone()),
+        _ => vm.stack.push(code.clone()),
     }
 }
 
@@ -142,7 +169,7 @@ fn parse(line: &str) -> Vec<Value> {
             } else {
                 Value::Op(word)
             };
-            eval(code, &mut vm.stack);
+            eval(code, &mut vm);
         }
         words = rest;
     }
