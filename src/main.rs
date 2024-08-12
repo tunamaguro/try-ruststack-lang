@@ -1,14 +1,17 @@
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    io::{BufRead, BufReader},
+};
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-enum Value<'src> {
+enum Value {
     Num(i32),
-    Op(&'src str),
-    Block(Vec<Value<'src>>),
-    Sym(&'src str),
+    Op(String),
+    Block(Vec<Value>),
+    Sym(String),
 }
 
-impl<'src> Value<'src> {
+impl Value {
     fn as_num(&self) -> i32 {
         match self {
             Self::Num(val) => *val,
@@ -16,24 +19,34 @@ impl<'src> Value<'src> {
         }
     }
 
-    fn to_block(self) -> Vec<Value<'src>> {
+    fn to_block(self) -> Vec<Value> {
         match self {
             Self::Block(val) => val,
             _ => panic!("Value is not a block"),
         }
     }
+
+    fn to_string(&self) -> String {
+        match self {
+            Value::Num(i) => i.to_string(),
+            Value::Op(ref s) | Value::Sym(ref s) => s.clone(),
+            Value::Block(_) => "<Block>".to_string(),
+        }
+    }
 }
 
-struct Vm<'src> {
-    stack: Vec<Value<'src>>,
-    vars: BTreeMap<&'src str, Value<'src>>,
+struct Vm {
+    stack: Vec<Value>,
+    vars: BTreeMap<String, Value>,
+    blocks: Vec<Vec<Value>>,
 }
 
-impl<'src> Vm<'src> {
+impl Vm {
     fn new() -> Self {
         Self {
             stack: vec![],
             vars: BTreeMap::new(),
+            blocks: vec![],
         }
     }
 }
@@ -58,6 +71,11 @@ fn lt(stack: &mut Vec<Value>) {
     let left = stack.pop().unwrap().as_num();
 
     stack.push(Value::Num(if left < right { 1 } else { 0 }))
+}
+
+fn puts(vm: &mut Vm) {
+    let val = vm.stack.pop().unwrap();
+    println!("{}", val.to_string());
 }
 
 fn op_if(vm: &mut Vm) {
@@ -94,7 +112,7 @@ fn op_def(vm: &mut Vm) {
     }
 }
 
-fn parse_block<'src, 'a>(input: &'a [&'src str]) -> (Value<'src>, &'a [&'src str]) {
+fn parse_block<'src, 'a>(input: &'a [&'src str]) -> (Value, &'a [&'src str]) {
     let mut tokens = vec![];
     let mut words = input;
 
@@ -111,7 +129,7 @@ fn parse_block<'src, 'a>(input: &'a [&'src str]) -> (Value<'src>, &'a [&'src str
         } else if let Ok(value) = word.parse::<i32>() {
             tokens.push(Value::Num(value))
         } else {
-            tokens.push(Value::Op(word));
+            tokens.push(Value::Op(word.to_owned()));
         }
 
         words = rest;
@@ -119,25 +137,53 @@ fn parse_block<'src, 'a>(input: &'a [&'src str]) -> (Value<'src>, &'a [&'src str
     (Value::Block(tokens), words)
 }
 
-fn eval<'src>(code: Value<'src>, vm: &mut Vm<'src>) {
+fn eval(code: Value, vm: &mut Vm) {
+    if let Some(top_block) = vm.blocks.last_mut() {
+        top_block.push(code);
+        return;
+    }
     match code {
-        Value::Op(op) => match op {
+        Value::Op(op) => match op.as_str() {
             "+" => add(&mut vm.stack),
             "-" => sub(&mut vm.stack),
             "*" => mul(&mut vm.stack),
             "/" => div(&mut vm.stack),
             "<" => lt(&mut vm.stack),
+            "puts" => puts(vm),
             "if" => op_if(vm),
             "def" => op_def(vm),
             _ => {
                 let val = vm
                     .vars
-                    .get(op)
+                    .get(&op)
                     .unwrap_or_else(|| panic!("{op:?} is not a defined operation"));
                 vm.stack.push(val.clone());
             }
         },
         _ => vm.stack.push(code.clone()),
+    }
+}
+
+fn parse_word(word: &str, vm: &mut Vm) {
+    if word.is_empty() {
+        return;
+    }
+    if word == "{" {
+        vm.blocks.push(vec![]);
+    } else if word == "}" {
+        let top_block = vm.blocks.pop().expect("Block stack underrun!");
+        eval(Value::Block(top_block), vm);
+    } else {
+        // ブロックじゃないものはNumかOpであると仮定している
+        let code = if let Ok(val) = word.parse::<i32>() {
+            Value::Num(val)
+        } else if let Some(var_name) = word.strip_prefix('/') {
+            // '/'を取り除いたものが変数名
+            Value::Sym(var_name.to_owned())
+        } else {
+            Value::Op(word.to_owned())
+        };
+        eval(code, vm);
     }
 }
 
@@ -157,9 +203,9 @@ fn parse(line: &str) -> Vec<Value> {
                 Value::Num(val)
             } else if let Some(var_name) = word.strip_prefix('/') {
                 // '/'を取り除いたものが変数名
-                Value::Sym(var_name)
+                Value::Sym(var_name.to_owned())
             } else {
-                Value::Op(word)
+                Value::Op(word.to_owned())
             };
             eval(code, &mut vm);
         }
@@ -170,9 +216,37 @@ fn parse(line: &str) -> Vec<Value> {
     vm.stack
 }
 
-fn main() {
+fn parse_batch<T>(source: T) -> Vec<Value>
+where
+    T: BufRead,
+{
+    let mut vm = Vm::new();
+    for line in source.lines().map_while(Result::ok) {
+        for word in line.split(' ') {
+            parse_word(word, &mut vm);
+        }
+    }
+    vm.stack
+}
+
+fn parse_interactive() {
+    let mut vm = Vm::new();
     for line in std::io::stdin().lines().map_while(Result::ok) {
-        parse(&line);
+        for word in line.split(' ') {
+            parse_word(word, &mut vm);
+        }
+        println!("stack :{:?}", vm.stack)
+    }
+}
+
+fn main() {
+    if let Some(f) = std::env::args()
+        .nth(1)
+        .and_then(|f| std::fs::File::open(f).ok())
+    {
+        parse_batch(BufReader::new(f));
+    } else {
+        parse_interactive();
     }
 }
 
