@@ -252,6 +252,8 @@ fn main() {
 
 #[cfg(test)]
 mod test {
+    use std::io::Cursor;
+
     use super::*;
 
     #[test]
@@ -287,5 +289,24 @@ mod test {
             parse("/x 10 def /y 20 def { x y < } { x } { y } if"),
             vec![Value::Num(10)]
         )
+    }
+
+    #[test]
+    fn test_if_multi_line() {
+        let txt = "
+        /x 10 def
+        /y 20 def
+        {
+        x y <
+        }
+        {
+        x
+        }
+        {
+        y
+        } if
+        ";
+
+        assert_eq!(parse_batch(Cursor::new(txt)), vec![Value::Num(10)])
     }
 }
