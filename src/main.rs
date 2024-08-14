@@ -60,9 +60,12 @@ struct Vm {
     blocks: Vec<Vec<Value>>,
 }
 
+type OpFunc = fn(&mut Vm);
+
 impl Vm {
     fn new() -> Self {
-        let native_functions: [(&str, fn(&mut Vm)); 8] = [
+        // 書籍ではArrayだが面倒なのでVecを使う
+        let native_functions: Vec<(&str, OpFunc)> = vec![
             ("+", add),
             ("-", sub),
             ("*", mul),
@@ -71,6 +74,8 @@ impl Vm {
             ("puts", puts),
             ("if", op_if),
             ("def", op_def),
+            ("dup", dup),
+            ("exch", exch),
         ];
         Self {
             stack: vec![],
