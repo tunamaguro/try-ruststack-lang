@@ -3,12 +3,30 @@ use std::{
     io::{BufRead, BufReader},
 };
 
+#[derive(Clone)]
+struct NativeOp(fn(&mut Vm));
+
+impl PartialEq for NativeOp {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self.0 as *const fn(), other.0 as *const fn())
+    }
+}
+
+impl Eq for NativeOp {}
+
+impl std::fmt::Debug for NativeOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<NativeOp>")
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Clone)]
 enum Value {
     Num(i32),
     Op(String),
     Block(Vec<Value>),
     Sym(String),
+    Native(NativeOp),
 }
 
 impl Value {
@@ -31,6 +49,7 @@ impl Value {
             Value::Num(i) => i.to_string(),
             Value::Op(ref s) | Value::Sym(ref s) => s.clone(),
             Value::Block(_) => "<Block>".to_string(),
+            Value::Native(ref op) => format!("{op:?}"),
         }
     }
 }
@@ -43,9 +62,22 @@ struct Vm {
 
 impl Vm {
     fn new() -> Self {
+        let native_functions: [(&str, fn(&mut Vm)); 8] = [
+            ("+", add),
+            ("-", sub),
+            ("*", mul),
+            ("/", div),
+            ("<", lt),
+            ("puts", puts),
+            ("if", op_if),
+            ("def", op_def),
+        ];
         Self {
             stack: vec![],
-            vars: BTreeMap::new(),
+            vars: native_functions
+                .into_iter()
+                .map(|(name, func)| (name.to_owned(), Value::Native(NativeOp(func))))
+                .collect(),
             blocks: vec![],
         }
     }
@@ -53,10 +85,10 @@ impl Vm {
 
 macro_rules! impl_op {
     ($name:ident,$op:tt) => {
-        fn $name(stack: &mut Vec<Value>) {
-            let right = stack.pop().unwrap().as_num();
-            let left = stack.pop().unwrap().as_num();
-            stack.push(Value::Num((left $op right) ))
+        fn $name(vm: &mut Vm) {
+            let right = vm.stack.pop().unwrap().as_num();
+            let left = vm.stack.pop().unwrap().as_num();
+            vm.stack.push(Value::Num((left $op right) ))
         }
     };
 }
@@ -66,16 +98,28 @@ impl_op!(sub, -);
 impl_op!(mul, *);
 impl_op!(div, /);
 
-fn lt(stack: &mut Vec<Value>) {
-    let right = stack.pop().unwrap().as_num();
-    let left = stack.pop().unwrap().as_num();
+fn lt(vm: &mut Vm) {
+    let right = vm.stack.pop().unwrap().as_num();
+    let left = vm.stack.pop().unwrap().as_num();
 
-    stack.push(Value::Num(if left < right { 1 } else { 0 }))
+    vm.stack.push(Value::Num(if left < right { 1 } else { 0 }))
 }
 
 fn puts(vm: &mut Vm) {
     let val = vm.stack.pop().unwrap();
     println!("{}", val.to_string());
+}
+
+fn dup(vm: &mut Vm) {
+    let val = vm.stack.last().unwrap();
+    vm.stack.push(val.clone())
+}
+
+fn exch(vm: &mut Vm) {
+    let last = vm.stack.pop().unwrap();
+    let second = vm.stack.pop().unwrap();
+    vm.stack.push(second);
+    vm.stack.push(last);
 }
 
 fn op_if(vm: &mut Vm) {
@@ -142,25 +186,23 @@ fn eval(code: Value, vm: &mut Vm) {
         top_block.push(code);
         return;
     }
-    match code {
-        Value::Op(op) => match op.as_str() {
-            "+" => add(&mut vm.stack),
-            "-" => sub(&mut vm.stack),
-            "*" => mul(&mut vm.stack),
-            "/" => div(&mut vm.stack),
-            "<" => lt(&mut vm.stack),
-            "puts" => puts(vm),
-            "if" => op_if(vm),
-            "def" => op_def(vm),
-            _ => {
-                let val = vm
-                    .vars
-                    .get(&op)
-                    .unwrap_or_else(|| panic!("{op:?} is not a defined operation"));
-                vm.stack.push(val.clone());
+    if let Value::Op(ref op) = code {
+        let val = vm
+            .vars
+            .get(op)
+            .unwrap_or_else(|| panic!("{op:?} is not a defined operation"))
+            .clone();
+        match val {
+            Value::Block(block) => {
+                for code in block {
+                    eval(code, vm)
+                }
             }
-        },
-        _ => vm.stack.push(code.clone()),
+            Value::Native(op) => op.0(vm),
+            _ => vm.stack.push(val),
+        }
+    } else {
+        vm.stack.push(code.clone())
     }
 }
 
