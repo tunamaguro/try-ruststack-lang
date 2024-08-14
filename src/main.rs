@@ -37,6 +37,13 @@ impl Value {
         }
     }
 
+    fn as_sym(&self) -> &str {
+        match self {
+            Self::Sym(s) => &s,
+            _ => panic!("not symbol"),
+        }
+    }
+
     fn to_block(self) -> Vec<Value> {
         match self {
             Self::Block(val) => val,
@@ -54,6 +61,7 @@ impl Value {
     }
 }
 
+#[derive(Debug)]
 struct Vm {
     stack: Vec<Value>,
     vars: BTreeMap<String, Value>,
@@ -150,15 +158,13 @@ fn op_if(vm: &mut Vm) {
 }
 
 fn op_def(vm: &mut Vm) {
-    let num = vm.stack.pop().unwrap();
-    let sym = vm.stack.pop().unwrap();
+    // MEMO: なんでここでブロックの中を実行している?
+    // let val = vm.stack.pop().unwrap();
+    // eval(val, vm);
+    let val = vm.stack.pop().unwrap();
+    let sym = vm.stack.pop().unwrap().as_sym().to_string();
 
-    match sym {
-        Value::Sym(ident) => {
-            vm.vars.insert(ident, num);
-        }
-        _ => panic!("is not symbol"),
-    }
+    vm.vars.insert(sym, val);
 }
 
 fn parse_block<'src, 'a>(input: &'a [&'src str]) -> (Value, &'a [&'src str]) {
@@ -273,6 +279,7 @@ where
             parse_word(word, &mut vm);
         }
     }
+    dbg!(&vm);
     vm.stack
 }
 
@@ -379,5 +386,17 @@ mod test {
             parse_batch(Cursor::new(txt)),
             vec![Value::Num(2), Value::Num(1)]
         )
+    }
+
+    #[test]
+    fn test_define_function() {
+        let txt = "
+        /double { 2 * } def
+        /square { dup * } def
+        /vec2sqlen { square exch square + } def
+        1 2 vec2sqlen
+        ";
+
+        assert_eq!(parse_batch(Cursor::new(txt)), vec![Value::Num(5)])
     }
 }
