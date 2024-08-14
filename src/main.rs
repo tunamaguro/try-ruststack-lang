@@ -123,8 +123,8 @@ fn dup(vm: &mut Vm) {
 fn exch(vm: &mut Vm) {
     let last = vm.stack.pop().unwrap();
     let second = vm.stack.pop().unwrap();
-    vm.stack.push(second);
     vm.stack.push(last);
+    vm.stack.push(second);
 }
 
 fn op_if(vm: &mut Vm) {
@@ -355,5 +355,29 @@ mod test {
         ";
 
         assert_eq!(parse_batch(Cursor::new(txt)), vec![Value::Num(10)])
+    }
+
+    #[test]
+    fn test_dup() {
+        let txt = "
+        1 2 dup
+        ";
+
+        assert_eq!(
+            parse_batch(Cursor::new(txt)),
+            vec![Value::Num(1), Value::Num(2), Value::Num(2)]
+        )
+    }
+
+    #[test]
+    fn test_exch() {
+        let txt = "
+        1 2 exch
+        ";
+
+        assert_eq!(
+            parse_batch(Cursor::new(txt)),
+            vec![Value::Num(2), Value::Num(1)]
+        )
     }
 }
