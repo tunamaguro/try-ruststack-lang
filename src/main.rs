@@ -87,12 +87,20 @@ impl Vm {
         ];
         Self {
             stack: vec![],
-            vars: native_functions
+            vars: vec![native_functions
                 .into_iter()
                 .map(|(name, func)| (name.to_owned(), Value::Native(NativeOp(func))))
-                .collect(),
+                .collect()],
             blocks: vec![],
         }
+    }
+
+    fn find_var(&self, name: &str) -> Option<Value> {
+        self.vars
+            .iter()
+            .rev()
+            .find_map(|val| val.get(name))
+            .map(|val| val.to_owned())
     }
 }
 
@@ -164,7 +172,7 @@ fn op_def(vm: &mut Vm) {
     let val = vm.stack.pop().unwrap();
     let sym = vm.stack.pop().unwrap().as_sym().to_string();
 
-    vm.vars.insert(sym, val);
+    vm.vars.last_mut().unwrap().insert(sym, val);
 }
 
 fn parse_block<'src, 'a>(input: &'a [&'src str]) -> (Value, &'a [&'src str]) {
@@ -199,15 +207,15 @@ fn eval(code: Value, vm: &mut Vm) {
     }
     if let Value::Op(ref op) = code {
         let val = vm
-            .vars
-            .get(op)
-            .unwrap_or_else(|| panic!("{op:?} is not a defined operation"))
-            .clone();
+            .find_var(op)
+            .unwrap_or_else(|| panic!("{op:?} is not a defined operation"));
         match val {
             Value::Block(block) => {
+                vm.vars.push(Default::default());
                 for code in block {
                     eval(code, vm)
                 }
+                vm.vars.pop().unwrap();
             }
             Value::Native(op) => op.0(vm),
             _ => vm.stack.push(val),
@@ -419,5 +427,33 @@ mod test {
         ";
 
         assert_eq!(parse_batch(Cursor::new(txt)), vec![Value::Num(3628800)])
+    }
+
+    #[test]
+    fn test_fib() {
+        let txt = "
+        /fib {
+            /n exch def
+            { n 1 < }
+            { 0 }
+            { 
+                { n 2 < }
+                { 1 }
+                {
+                
+                    n 1 -
+                    fib
+                    n 2 -
+                    fib
+                    +
+                }
+                if
+            }
+            if
+        } def
+        10 fib
+        ";
+
+        assert_eq!(parse_batch(Cursor::new(txt)), vec![Value::Num(55)])
     }
 }
