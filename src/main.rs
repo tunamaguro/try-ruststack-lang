@@ -50,21 +50,24 @@ impl Value {
             _ => panic!("Value is not a block"),
         }
     }
+}
 
-    fn to_string(&self) -> String {
-        match self {
+impl std::fmt::Display for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
             Value::Num(i) => i.to_string(),
             Value::Op(ref s) | Value::Sym(ref s) => s.clone(),
             Value::Block(_) => "<Block>".to_string(),
             Value::Native(ref op) => format!("{op:?}"),
-        }
+        };
+        write!(f, "{}", s)
     }
 }
 
 #[derive(Debug)]
 struct Vm {
     stack: Vec<Value>,
-    vars: BTreeMap<String, Value>,
+    vars: Vec<BTreeMap<String, Value>>,
     blocks: Vec<Vec<Value>>,
 }
 
