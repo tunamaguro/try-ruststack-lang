@@ -279,7 +279,6 @@ where
             parse_word(word, &mut vm);
         }
     }
-    dbg!(&vm);
     vm.stack
 }
 
@@ -398,5 +397,27 @@ mod test {
         ";
 
         assert_eq!(parse_batch(Cursor::new(txt)), vec![Value::Num(5)])
+    }
+
+    #[test]
+    fn test_factorial() {
+        let txt = "
+        /factorial_int {
+            /acc exch def
+            /n exch def
+            { n 2 < }
+            { acc }
+            { 
+                n 1 -
+                acc n *
+                factorial_int
+            }
+            if
+        } def
+        /factorial { 1 factorial_int } def
+        10 factorial
+        ";
+
+        assert_eq!(parse_batch(Cursor::new(txt)), vec![Value::Num(3628800)])
     }
 }
