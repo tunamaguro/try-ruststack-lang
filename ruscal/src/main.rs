@@ -95,14 +95,29 @@ fn token(input: &str) -> Option<(&str, Expression)> {
     None
 }
 
-fn add(input: &str) -> Option<(&str, Expression)> {
-    let (next_input, lhs) = expr(input)?;
+fn add_term(input: &str) -> Option<(&str, Expression)> {
+    let (next_input, lhs) = term(input)?;
 
     let next_input = plus(whitespace(next_input))?;
+    Some((next_input, lhs))
+}
 
-    let (next_input, rhs) = term(next_input)?;
+fn add(mut input: &str) -> Option<(&str, Expression)> {
+    let mut left = None;
+    while let Some((next_input, expr)) = add_term(input) {
+        if let Some(prev_left) = left {
+            left = Some(Expression::Add(Box::new(prev_left), Box::new(expr)))
+        } else {
+            left = Some(expr)
+        }
 
-    Some((next_input, Expression::Add(Box::new(lhs), Box::new(rhs))))
+        input = next_input;
+    }
+    let left = left?;
+
+    let (next_input, rhs) = expr(input)?;
+
+    Some((next_input, Expression::Add(Box::new(left), Box::new(rhs))))
 }
 
 fn paren(input: &str) -> Option<(&str, Expression)> {
@@ -144,5 +159,38 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    
+    use crate::{expr, Expression::*};
+
+    #[test]
+    fn test_simple_add() {
+        let txt = "100 + 200";
+        assert_eq!(
+            expr(txt),
+            Some((
+                "",
+                Add(Box::new(NumLiteral(100.0)), Box::new(NumLiteral(200.0)))
+            ))
+        )
+    }
+
+    #[test]
+    fn test_nested_add() {
+        let txt = "((10 + 20) + 30 + 40) + 50";
+        assert_eq!(
+            expr(txt),
+            Some((
+                "",
+                Add(
+                    Box::new(Add(
+                        Box::new(Add(
+                            Box::new(Add(Box::new(NumLiteral(10.0)), Box::new(NumLiteral(20.0)))),
+                            Box::new(NumLiteral(30.0))
+                        )),
+                        Box::new(NumLiteral(40.0))
+                    )),
+                    Box::new(NumLiteral(50.0))
+                )
+            ))
+        )
+    }
 }
