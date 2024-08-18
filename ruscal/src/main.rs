@@ -1,12 +1,15 @@
+use std::io::Read;
+
 use nom::{
     branch::alt,
-    character::complete::{alpha1, alphanumeric1, char, multispace0},
+    bytes::complete::tag,
+    character::complete::{alpha1, alphanumeric1, char, multispace0, multispace1},
     combinator::{opt, recognize},
     error::ParseError,
-    multi::{fold_many0, many0},
+    multi::{fold_many0, many0, separated_list0},
     number::complete::recognize_float,
     sequence::{delimited, pair},
-    IResult, Parser,
+    Finish, IResult, Parser,
 };
 
 #[derive(Debug, PartialEq, Clone)]
@@ -19,6 +22,14 @@ enum Expression<'src> {
     Mul(Box<Expression<'src>>, Box<Expression<'src>>),
     Div(Box<Expression<'src>>, Box<Expression<'src>>),
 }
+
+#[derive(Debug, PartialEq, Clone)]
+enum Statement<'src> {
+    Expression(Expression<'src>),
+    VarDef(&'src str, Expression<'src>),
+}
+
+type Statements<'a> = Vec<Statement<'a>>;
 
 fn space_delimited<'src, O, E, F>(f: F) -> impl FnMut(&'src str) -> IResult<&'src str, O, E>
 where
@@ -102,6 +113,29 @@ fn expr(input: &str) -> IResult<&str, Expression> {
     )(input)
 }
 
+fn var_def(input: &str) -> IResult<&str, Statement> {
+    // ここはspace_delimitedだとvara=1みたいなのが許されるのでmultispace1
+    let (input, _) = delimited(multispace0, tag("var"), multispace1)(input)?;
+    let (input, ident) = space_delimited(identifier)(input)?;
+    let (input, _) = space_delimited(char('='))(input)?;
+    let (input, expr) = space_delimited(expr)(input)?;
+    Ok((input, Statement::VarDef(ident, expr)))
+}
+
+fn expr_statement(input: &str) -> IResult<&str, Statement> {
+    let (input, expr) = expr(input)?;
+    Ok((input, Statement::Expression(expr)))
+}
+
+fn statement(input: &str) -> IResult<&str, Statement> {
+    alt((var_def, expr_statement))(input)
+}
+
+fn statements(input: &str) -> Result<Statements, nom::error::Error<&str>> {
+    let (_, res) = separated_list0(char(';'), statement)(input).finish()?;
+    Ok(res)
+}
+
 fn unary_fn(f: fn(f64) -> f64) -> impl Fn(Vec<Expression>) -> f64 {
     move |args| {
         f(eval(
@@ -145,23 +179,17 @@ fn eval(expr: Expression) -> f64 {
 }
 
 fn main() {
-    fn ex_eval(input: &str) -> Result<f64, nom::Err<nom::error::Error<&str>>> {
-        expr(input).map(|(_, e)| eval(e))
+    let mut buf = String::new();
+    if std::io::stdin().read_to_string(&mut buf).is_ok() {
+        let parsed_statements = match statements(&buf) {
+            Ok(parsed) => parsed,
+            Err(e) => {
+                eprintln!("Parsed error: {e:?}");
+                return;
+            }
+        };
+        println!("{:?}", parsed_statements)
     }
-    let input = "sqrt(2) / 2";
-    println!("source: {:?}, parsed: {:?}", input, ex_eval(input));
-
-    let input = "sin(pi / 4 )";
-    println!("source: {:?}, parsed: {:?}", input, ex_eval(input));
-
-    let input = "atan2(1,1)";
-    println!("source: {:?}, parsed: {:?}", input, ex_eval(input));
-
-    let input = "10 - (100 + 1)";
-    println!("source: {:?}, parsed: {:?}", input, ex_eval(input));
-
-    let input = "(3 + 7) / (2 + 3)";
-    println!("source: {:?}, parsed: {:?}", input, ex_eval(input));
 }
 
 #[cfg(test)]
