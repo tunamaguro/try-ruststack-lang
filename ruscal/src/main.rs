@@ -1,7 +1,7 @@
 use nom::{
     branch::alt,
     character::complete::{alpha1, alphanumeric1, char, multispace0},
-    combinator::recognize,
+    combinator::{opt, recognize},
     error::ParseError,
     multi::{fold_many0, many0},
     number::complete::recognize_float,
@@ -13,6 +13,7 @@ use nom::{
 enum Expression<'src> {
     Ident(&'src str),
     NumLiteral(f64),
+    FnInvoke(&'src str, Vec<Expression<'src>>),
     Add(Box<Expression<'src>>, Box<Expression<'src>>),
     Sub(Box<Expression<'src>>, Box<Expression<'src>>),
     Mul(Box<Expression<'src>>, Box<Expression<'src>>),
@@ -55,8 +56,23 @@ fn paren(input: &str) -> IResult<&str, Expression> {
     space_delimited(delimited(char('('), expr, char(')')))(input)
 }
 
+fn func_call(input: &str) -> IResult<&str, Expression> {
+    let (input, ident) = space_delimited(identifier)(input)?;
+    let (input, args) = space_delimited(delimited(
+        char('('),
+        many0(delimited(
+            multispace0,
+            expr,
+            space_delimited(opt(char(','))),
+        )),
+        char(')'),
+    ))(input)?;
+
+    Ok((input, Expression::FnInvoke(ident, args)))
+}
+
 fn factor(input: &str) -> IResult<&str, Expression> {
-    alt((number, ident, paren))(input)
+    alt((number, func_call, ident, paren))(input)
 }
 
 fn term(input: &str) -> IResult<&str, Expression> {
@@ -86,6 +102,23 @@ fn expr(input: &str) -> IResult<&str, Expression> {
     )(input)
 }
 
+fn unary_fn(f: fn(f64) -> f64) -> impl Fn(Vec<Expression>) -> f64 {
+    move |args| {
+        f(eval(
+            args.into_iter().next().expect("function missing argument"),
+        ))
+    }
+}
+
+fn binary_fn(f: fn(f64, f64) -> f64) -> impl Fn(Vec<Expression>) -> f64 {
+    move |args| {
+        let mut args = args.into_iter();
+        let lhs = eval(args.next().expect("function missing first argument"));
+        let rhs = eval(args.next().expect("function missing second argument"));
+        f(lhs, rhs)
+    }
+}
+
 fn eval(expr: Expression) -> f64 {
     match expr {
         Expression::Ident("pi") => std::f64::consts::PI,
@@ -95,6 +128,19 @@ fn eval(expr: Expression) -> f64 {
         Expression::Sub(lhs, rhs) => eval(*lhs) - eval(*rhs),
         Expression::Mul(lhs, rhs) => eval(*lhs) * eval(*rhs),
         Expression::Div(lhs, rhs) => eval(*lhs) / eval(*rhs),
+        Expression::FnInvoke("sqrt", args) => unary_fn(f64::sqrt)(args),
+        Expression::FnInvoke("sin", args) => unary_fn(f64::sin)(args),
+        Expression::FnInvoke("cos", args) => unary_fn(f64::cos)(args),
+        Expression::FnInvoke("tan", args) => unary_fn(f64::tan)(args),
+        Expression::FnInvoke("asin", args) => unary_fn(f64::asin)(args),
+        Expression::FnInvoke("acos", args) => unary_fn(f64::acos)(args),
+        Expression::FnInvoke("atan", args) => unary_fn(f64::atan)(args),
+        Expression::FnInvoke("atan2", args) => binary_fn(f64::atan2)(args),
+        Expression::FnInvoke("pow", args) => binary_fn(f64::powf)(args),
+        Expression::FnInvoke("exp", args) => unary_fn(f64::exp)(args),
+        Expression::FnInvoke("log", args) => binary_fn(f64::log)(args),
+        Expression::FnInvoke("log10", args) => unary_fn(f64::log10)(args),
+        Expression::FnInvoke(name, _) => panic!("Unknown function {name:?}"),
     }
 }
 
@@ -102,18 +148,18 @@ fn main() {
     fn ex_eval(input: &str) -> Result<f64, nom::Err<nom::error::Error<&str>>> {
         expr(input).map(|(_, e)| eval(e))
     }
-    let input = "123";
+    let input = "sqrt(2) / 2";
     println!("source: {:?}, parsed: {:?}", input, ex_eval(input));
-  
-    let input = "2 * pi";
+
+    let input = "sin(pi / 4 )";
     println!("source: {:?}, parsed: {:?}", input, ex_eval(input));
-  
-    let input = "(123 + 456 ) + pi";
+
+    let input = "atan2(1,1)";
     println!("source: {:?}, parsed: {:?}", input, ex_eval(input));
-  
+
     let input = "10 - (100 + 1)";
     println!("source: {:?}, parsed: {:?}", input, ex_eval(input));
-  
+
     let input = "(3 + 7) / (2 + 3)";
     println!("source: {:?}, parsed: {:?}", input, ex_eval(input));
 }
