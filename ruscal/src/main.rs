@@ -6,10 +6,10 @@ use nom::{
     character::complete::{alpha1, alphanumeric1, char, multispace0, multispace1},
     combinator::{opt, recognize},
     error::ParseError,
-    multi::{fold_many0, many0, separated_list0},
+    multi::{fold_many0, many0},
     number::complete::recognize_float,
     sequence::{delimited, pair},
-    Finish, IResult, Parser,
+    IResult, Parser,
 };
 
 #[derive(Debug, PartialEq, Clone)]
@@ -33,6 +33,12 @@ enum Statement<'src> {
     Expression(Expression<'src>),
     VarDef(&'src str, Expression<'src>),
     VarAssign(&'src str, Expression<'src>),
+    For {
+        loop_var: &'src str,
+        start: Expression<'src>,
+        end: Expression<'src>,
+        stmts: Statements<'src>,
+    },
 }
 
 type Statements<'a> = Vec<Statement<'a>>;
@@ -171,18 +177,38 @@ fn expr_statement(input: &str) -> IResult<&str, Statement> {
     Ok((input, Statement::Expression(expr)))
 }
 
+fn for_statement(input: &str) -> IResult<&str, Statement> {
+    let (input, _) = space_delimited(tag("for"))(input)?;
+    let (input, loop_var) = space_delimited(identifier)(input)?;
+    let (input, _) = space_delimited(tag("in"))(input)?;
+    let (input, start) = space_delimited(expr)(input)?;
+    let (input, _) = space_delimited(tag("to"))(input)?;
+    let (input, end) = space_delimited(expr)(input)?;
+    let (input, stmts) = delimited(open_brace, statements, close_brace)(input)?;
+    Ok((
+        input,
+        Statement::For {
+            loop_var,
+            start,
+            end,
+            stmts,
+        },
+    ))
+}
+
 fn statement(input: &str) -> IResult<&str, Statement> {
-    alt((var_def, var_assign, expr_statement))(input)
+    alt((for_statement, var_def, var_assign, expr_statement))(input)
 }
 
-fn statements(input: &str) -> Result<Statements, nom::error::Error<&str>> {
-    let (_, res) = separated_list0(char(';'), statement)(input).finish()?;
-    Ok(res)
+fn statements(input: &str) -> IResult<&str, Statements> {
+    let (input, stmts) = many0(statement)(input)?;
+    let (input, _) = opt(char(';'))(input)?;
+    Ok((input, stmts))
 }
 
-type Variables<'a> = BTreeMap<&'a str, f64>;
+type Variables = BTreeMap<String, f64>;
 
-fn unary_fn(f: fn(f64) -> f64) -> impl Fn(Vec<Expression>, &Variables) -> f64 {
+fn unary_fn(f: fn(f64) -> f64) -> impl Fn(&[Expression], &Variables) -> f64 {
     move |args, variables| {
         f(eval(
             args.into_iter().next().expect("function missing argument"),
@@ -191,7 +217,7 @@ fn unary_fn(f: fn(f64) -> f64) -> impl Fn(Vec<Expression>, &Variables) -> f64 {
     }
 }
 
-fn binary_fn(f: fn(f64, f64) -> f64) -> impl Fn(Vec<Expression>, &Variables) -> f64 {
+fn binary_fn(f: fn(f64, f64) -> f64) -> impl Fn(&[Expression], &Variables) -> f64 {
     move |args, vars| {
         let mut args = args.into_iter();
         let lhs = eval(args.next().expect("function missing first argument"), vars);
@@ -200,15 +226,15 @@ fn binary_fn(f: fn(f64, f64) -> f64) -> impl Fn(Vec<Expression>, &Variables) -> 
     }
 }
 
-fn eval(expr: Expression, vars: &Variables) -> f64 {
+fn eval(expr: &Expression, vars: &Variables) -> f64 {
     match expr {
         Expression::Ident("pi") => std::f64::consts::PI,
-        Expression::Ident(ident) => *vars.get(ident).expect("Variables not found"),
-        Expression::NumLiteral(num) => num,
-        Expression::Add(lhs, rhs) => eval(*lhs, vars) + eval(*rhs, vars),
-        Expression::Sub(lhs, rhs) => eval(*lhs, vars) - eval(*rhs, vars),
-        Expression::Mul(lhs, rhs) => eval(*lhs, vars) * eval(*rhs, vars),
-        Expression::Div(lhs, rhs) => eval(*lhs, vars) / eval(*rhs, vars),
+        Expression::Ident(ident) => *vars.get(*ident).expect("Variables not found"),
+        Expression::NumLiteral(num) => *num,
+        Expression::Add(lhs, rhs) => eval(lhs, vars) + eval(rhs, vars),
+        Expression::Sub(lhs, rhs) => eval(lhs, vars) - eval(rhs, vars),
+        Expression::Mul(lhs, rhs) => eval(lhs, vars) * eval(rhs, vars),
+        Expression::Div(lhs, rhs) => eval(lhs, vars) / eval(rhs, vars),
         Expression::FnInvoke("sqrt", args) => unary_fn(f64::sqrt)(args, vars),
         Expression::FnInvoke("sin", args) => unary_fn(f64::sin)(args, vars),
         Expression::FnInvoke("cos", args) => unary_fn(f64::cos)(args, vars),
@@ -223,10 +249,44 @@ fn eval(expr: Expression, vars: &Variables) -> f64 {
         Expression::FnInvoke("log10", args) => unary_fn(f64::log10)(args, vars),
         Expression::FnInvoke(name, _) => panic!("Unknown function {name:?}"),
         Expression::If(cond, true_case, false_case) => {
-            if (eval(*cond, vars)) != 0.0 {
-                eval(*true_case, vars)
+            if (eval(cond, vars)) != 0.0 {
+                eval(true_case, vars)
+            } else if let Some(false_case) = false_case {
+                eval(false_case, vars)
             } else {
-                false_case.map(|f_case| eval(*f_case, vars)).unwrap_or(0.)
+                0.0
+            }
+        }
+    }
+}
+
+fn eval_stmts(stmts: &[Statement], vars: &mut Variables) {
+    for statement in stmts {
+        match statement {
+            Statement::Expression(expr) => println!("eval : {:?}", eval(expr, vars)),
+            Statement::VarDef(ident, expr) => {
+                let value = eval(expr, vars);
+                vars.insert(ident.to_string(), value);
+            }
+            Statement::VarAssign(ident, expr) => {
+                if !vars.contains_key(*ident) {
+                    panic!("Variables is not found")
+                }
+                let value = eval(expr, vars);
+                vars.insert(ident.to_string(), value);
+            }
+            Statement::For {
+                loop_var,
+                start,
+                end,
+                stmts,
+            } => {
+                let start = eval(start, &vars) as i32;
+                let end = eval(end, &vars) as i32;
+                for i in start..end {
+                    vars.insert(loop_var.to_string(), i.into());
+                    eval_stmts(stmts, vars);
+                }
             }
         }
     }
@@ -236,29 +296,14 @@ fn main() {
     let mut buf = String::new();
     let mut variables = BTreeMap::new();
     if std::io::stdin().read_to_string(&mut buf).is_ok() {
-        let parsed_statements = match statements(&buf) {
+        let (_, parsed_statements) = match statements(&buf) {
             Ok(parsed) => parsed,
             Err(e) => {
                 eprintln!("Parsed error: {e:?}");
                 return;
             }
         };
-        for statement in parsed_statements {
-            match statement {
-                Statement::Expression(expr) => println!("eval : {:?}", eval(expr, &variables)),
-                Statement::VarDef(ident, expr) => {
-                    let value = eval(expr, &variables);
-                    variables.insert(ident, value);
-                }
-                Statement::VarAssign(ident, expr) => {
-                    if !variables.contains_key(ident) {
-                        panic!("Variables is not found")
-                    }
-                    let value = eval(expr, &variables);
-                    variables.insert(ident, value);
-                }
-            }
-        }
+        eval_stmts(&parsed_statements, &mut variables);
     }
 }
 
