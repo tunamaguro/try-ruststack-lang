@@ -8,7 +8,7 @@ use nom::{
     error::ParseError,
     multi::{fold_many0, many0},
     number::complete::recognize_float,
-    sequence::{delimited, pair},
+    sequence::{delimited, pair, terminated},
     IResult, Parser,
 };
 
@@ -196,13 +196,19 @@ fn for_statement(input: &str) -> IResult<&str, Statement> {
     ))
 }
 
-fn statement(input: &str) -> IResult<&str, Statement> {
-    alt((for_statement, var_def, var_assign, expr_statement))(input)
-}
+fn statement(i: &str) -> IResult<&str, Statement> {
+    alt((
+      for_statement,
+    //   for文以外は終わりに";"が付く
+      terminated(
+        alt((var_def, var_assign, expr_statement)),
+        char(';'),
+      ),
+    ))(i)
+  }
 
 fn statements(input: &str) -> IResult<&str, Statements> {
     let (input, stmts) = many0(statement)(input)?;
-    let (input, _) = opt(char(';'))(input)?;
     Ok((input, stmts))
 }
 
@@ -211,7 +217,7 @@ type Variables = BTreeMap<String, f64>;
 fn unary_fn(f: fn(f64) -> f64) -> impl Fn(&[Expression], &Variables) -> f64 {
     move |args, variables| {
         f(eval(
-            args.into_iter().next().expect("function missing argument"),
+            args.iter().next().expect("function missing argument"),
             variables,
         ))
     }
@@ -219,7 +225,7 @@ fn unary_fn(f: fn(f64) -> f64) -> impl Fn(&[Expression], &Variables) -> f64 {
 
 fn binary_fn(f: fn(f64, f64) -> f64) -> impl Fn(&[Expression], &Variables) -> f64 {
     move |args, vars| {
-        let mut args = args.into_iter();
+        let mut args = args.iter();
         let lhs = eval(args.next().expect("function missing first argument"), vars);
         let rhs = eval(args.next().expect("function missing second argument"), vars);
         f(lhs, rhs)
@@ -281,8 +287,8 @@ fn eval_stmts(stmts: &[Statement], vars: &mut Variables) {
                 end,
                 stmts,
             } => {
-                let start = eval(start, &vars) as i32;
-                let end = eval(end, &vars) as i32;
+                let start = eval(start, vars) as i32;
+                let end = eval(end, vars) as i32;
                 for i in start..end {
                     vars.insert(loop_var.to_string(), i.into());
                     eval_stmts(stmts, vars);
@@ -303,6 +309,7 @@ fn main() {
                 return;
             }
         };
+        dbg!(&parsed_statements);
         eval_stmts(&parsed_statements, &mut variables);
     }
 }
