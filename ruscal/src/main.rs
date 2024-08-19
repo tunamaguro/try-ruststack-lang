@@ -133,7 +133,7 @@ fn if_expr(input: &str) -> IResult<&str, Expression> {
     let (input, _) = space_delimited(tag("if"))(input)?;
     let (input, cond) = expr(input)?;
     let (input, true_case) = delimited(open_brace, expr, close_brace)(input)?;
-    let (input, _) = space_delimited(tag("else"))(input)?;
+    // let (input, _) = space_delimited(tag("else"))(input)?;
     let (input, false_case) = opt(delimited(open_brace, expr, close_brace))(input)?;
 
     Ok((
