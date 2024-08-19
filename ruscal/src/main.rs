@@ -1,4 +1,4 @@
-use std::io::Read;
+use std::{collections::BTreeMap, io::Read};
 
 use nom::{
     branch::alt,
@@ -136,50 +136,54 @@ fn statements(input: &str) -> Result<Statements, nom::error::Error<&str>> {
     Ok(res)
 }
 
-fn unary_fn(f: fn(f64) -> f64) -> impl Fn(Vec<Expression>) -> f64 {
-    move |args| {
+type Variables<'a> = BTreeMap<&'a str, f64>;
+
+fn unary_fn(f: fn(f64) -> f64) -> impl Fn(Vec<Expression>, &Variables) -> f64 {
+    move |args, variables| {
         f(eval(
             args.into_iter().next().expect("function missing argument"),
+            variables,
         ))
     }
 }
 
-fn binary_fn(f: fn(f64, f64) -> f64) -> impl Fn(Vec<Expression>) -> f64 {
-    move |args| {
+fn binary_fn(f: fn(f64, f64) -> f64) -> impl Fn(Vec<Expression>, &Variables) -> f64 {
+    move |args, vars| {
         let mut args = args.into_iter();
-        let lhs = eval(args.next().expect("function missing first argument"));
-        let rhs = eval(args.next().expect("function missing second argument"));
+        let lhs = eval(args.next().expect("function missing first argument"), vars);
+        let rhs = eval(args.next().expect("function missing second argument"), vars);
         f(lhs, rhs)
     }
 }
 
-fn eval(expr: Expression) -> f64 {
+fn eval(expr: Expression, vars: &Variables) -> f64 {
     match expr {
         Expression::Ident("pi") => std::f64::consts::PI,
-        Expression::Ident(ident) => panic!("Unknown name {:?}", ident),
+        Expression::Ident(ident) => *vars.get(ident).expect("Variables not found"),
         Expression::NumLiteral(num) => num,
-        Expression::Add(lhs, rhs) => eval(*lhs) + eval(*rhs),
-        Expression::Sub(lhs, rhs) => eval(*lhs) - eval(*rhs),
-        Expression::Mul(lhs, rhs) => eval(*lhs) * eval(*rhs),
-        Expression::Div(lhs, rhs) => eval(*lhs) / eval(*rhs),
-        Expression::FnInvoke("sqrt", args) => unary_fn(f64::sqrt)(args),
-        Expression::FnInvoke("sin", args) => unary_fn(f64::sin)(args),
-        Expression::FnInvoke("cos", args) => unary_fn(f64::cos)(args),
-        Expression::FnInvoke("tan", args) => unary_fn(f64::tan)(args),
-        Expression::FnInvoke("asin", args) => unary_fn(f64::asin)(args),
-        Expression::FnInvoke("acos", args) => unary_fn(f64::acos)(args),
-        Expression::FnInvoke("atan", args) => unary_fn(f64::atan)(args),
-        Expression::FnInvoke("atan2", args) => binary_fn(f64::atan2)(args),
-        Expression::FnInvoke("pow", args) => binary_fn(f64::powf)(args),
-        Expression::FnInvoke("exp", args) => unary_fn(f64::exp)(args),
-        Expression::FnInvoke("log", args) => binary_fn(f64::log)(args),
-        Expression::FnInvoke("log10", args) => unary_fn(f64::log10)(args),
+        Expression::Add(lhs, rhs) => eval(*lhs, vars) + eval(*rhs, vars),
+        Expression::Sub(lhs, rhs) => eval(*lhs, vars) - eval(*rhs, vars),
+        Expression::Mul(lhs, rhs) => eval(*lhs, vars) * eval(*rhs, vars),
+        Expression::Div(lhs, rhs) => eval(*lhs, vars) / eval(*rhs, vars),
+        Expression::FnInvoke("sqrt", args) => unary_fn(f64::sqrt)(args, vars),
+        Expression::FnInvoke("sin", args) => unary_fn(f64::sin)(args, vars),
+        Expression::FnInvoke("cos", args) => unary_fn(f64::cos)(args, vars),
+        Expression::FnInvoke("tan", args) => unary_fn(f64::tan)(args, vars),
+        Expression::FnInvoke("asin", args) => unary_fn(f64::asin)(args, vars),
+        Expression::FnInvoke("acos", args) => unary_fn(f64::acos)(args, vars),
+        Expression::FnInvoke("atan", args) => unary_fn(f64::atan)(args, vars),
+        Expression::FnInvoke("atan2", args) => binary_fn(f64::atan2)(args, vars),
+        Expression::FnInvoke("pow", args) => binary_fn(f64::powf)(args, vars),
+        Expression::FnInvoke("exp", args) => unary_fn(f64::exp)(args, vars),
+        Expression::FnInvoke("log", args) => binary_fn(f64::log)(args, vars),
+        Expression::FnInvoke("log10", args) => unary_fn(f64::log10)(args, vars),
         Expression::FnInvoke(name, _) => panic!("Unknown function {name:?}"),
     }
 }
 
 fn main() {
     let mut buf = String::new();
+    let mut variables = BTreeMap::new();
     if std::io::stdin().read_to_string(&mut buf).is_ok() {
         let parsed_statements = match statements(&buf) {
             Ok(parsed) => parsed,
@@ -188,7 +192,15 @@ fn main() {
                 return;
             }
         };
-        println!("{:?}", parsed_statements)
+        for statement in parsed_statements {
+            match statement {
+                Statement::Expression(expr) => println!("eval : {:?}", eval(expr, &variables)),
+                Statement::VarDef(name, expr) => {
+                    let value = eval(expr, &variables);
+                    variables.insert(name, value);
+                }
+            }
+        }
     }
 }
 
