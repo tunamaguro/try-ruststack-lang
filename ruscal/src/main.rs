@@ -21,6 +21,11 @@ enum Expression<'src> {
     Sub(Box<Expression<'src>>, Box<Expression<'src>>),
     Mul(Box<Expression<'src>>, Box<Expression<'src>>),
     Div(Box<Expression<'src>>, Box<Expression<'src>>),
+    If(
+        Box<Expression<'src>>,
+        Box<Expression<'src>>,
+        Option<Box<Expression<'src>>>,
+    ),
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -100,7 +105,7 @@ fn term(input: &str) -> IResult<&str, Expression> {
     )(input)
 }
 
-fn expr(input: &str) -> IResult<&str, Expression> {
+fn num_expr(input: &str) -> IResult<&str, Expression> {
     let (input, left) = term(input)?;
 
     fold_many0(
@@ -112,6 +117,37 @@ fn expr(input: &str) -> IResult<&str, Expression> {
             _ => panic!("Additive expression should have '+' or '/' operator"),
         },
     )(input)
+}
+
+fn open_brace(input: &str) -> IResult<&str, ()> {
+    let (input, _) = space_delimited(char('{'))(input)?;
+    Ok((input, ()))
+}
+
+fn close_brace(input: &str) -> IResult<&str, ()> {
+    let (input, _) = space_delimited(char('}'))(input)?;
+    Ok((input, ()))
+}
+
+fn if_expr(input: &str) -> IResult<&str, Expression> {
+    let (input, _) = space_delimited(tag("if"))(input)?;
+    let (input, cond) = expr(input)?;
+    let (input, true_case) = delimited(open_brace, expr, close_brace)(input)?;
+    let (input, _) = space_delimited(tag("else"))(input)?;
+    let (input, false_case) = opt(delimited(open_brace, expr, close_brace))(input)?;
+
+    Ok((
+        input,
+        Expression::If(
+            Box::new(cond),
+            Box::new(true_case),
+            false_case.map(Box::new),
+        ),
+    ))
+}
+
+fn expr(input: &str) -> IResult<&str, Expression> {
+    alt((if_expr, num_expr))(input)
 }
 
 fn var_def(input: &str) -> IResult<&str, Statement> {
@@ -186,6 +222,13 @@ fn eval(expr: Expression, vars: &Variables) -> f64 {
         Expression::FnInvoke("log", args) => binary_fn(f64::log)(args, vars),
         Expression::FnInvoke("log10", args) => unary_fn(f64::log10)(args, vars),
         Expression::FnInvoke(name, _) => panic!("Unknown function {name:?}"),
+        Expression::If(cond, true_case, false_case) => {
+            if (eval(*cond, vars)) != 0.0 {
+                eval(*true_case, vars)
+            } else {
+                false_case.map(|f_case| eval(*f_case, vars)).unwrap_or(0.)
+            }
+        }
     }
 }
 
