@@ -27,6 +27,7 @@ enum Expression<'src> {
 enum Statement<'src> {
     Expression(Expression<'src>),
     VarDef(&'src str, Expression<'src>),
+    VarAssign(&'src str, Expression<'src>),
 }
 
 type Statements<'a> = Vec<Statement<'a>>;
@@ -122,13 +123,20 @@ fn var_def(input: &str) -> IResult<&str, Statement> {
     Ok((input, Statement::VarDef(ident, expr)))
 }
 
+fn var_assign(input: &str) -> IResult<&str, Statement> {
+    let (input, ident) = space_delimited(identifier)(input)?;
+    let (input, _) = space_delimited(char('='))(input)?;
+    let (input, expr) = space_delimited(expr)(input)?;
+    Ok((input, Statement::VarAssign(ident, expr)))
+}
+
 fn expr_statement(input: &str) -> IResult<&str, Statement> {
     let (input, expr) = expr(input)?;
     Ok((input, Statement::Expression(expr)))
 }
 
 fn statement(input: &str) -> IResult<&str, Statement> {
-    alt((var_def, expr_statement))(input)
+    alt((var_def, var_assign, expr_statement))(input)
 }
 
 fn statements(input: &str) -> Result<Statements, nom::error::Error<&str>> {
@@ -195,9 +203,16 @@ fn main() {
         for statement in parsed_statements {
             match statement {
                 Statement::Expression(expr) => println!("eval : {:?}", eval(expr, &variables)),
-                Statement::VarDef(name, expr) => {
+                Statement::VarDef(ident, expr) => {
                     let value = eval(expr, &variables);
-                    variables.insert(name, value);
+                    variables.insert(ident, value);
+                }
+                Statement::VarAssign(ident, expr) => {
+                    if !variables.contains_key(ident) {
+                        panic!("Variables is not found")
+                    }
+                    let value = eval(expr, &variables);
+                    variables.insert(ident, value);
                 }
             }
         }
