@@ -1,19 +1,10 @@
 
-fn add(a, b) {
-    a + b;
+fn process() {
+    fn add(a, b) {
+        a + b;
+    }
+
+    add(1, pow(2, 3));
 }
 
-fn max(a, b) {
-    if a < b {
-        b
-    } else {
-        a
-    };
-}
-
-print(add(1, 2));
-print(max(1, 2));
-
-var a = 2 > 1;
-
-print(a);
+print(process());
