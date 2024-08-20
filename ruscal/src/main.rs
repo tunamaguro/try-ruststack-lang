@@ -21,6 +21,7 @@ enum Expression<'src> {
     Sub(Box<Expression<'src>>, Box<Expression<'src>>),
     Mul(Box<Expression<'src>>, Box<Expression<'src>>),
     Div(Box<Expression<'src>>, Box<Expression<'src>>),
+    Lt(Box<Expression<'src>>, Box<Expression<'src>>),
     If(
         Box<Expression<'src>>,
         Box<Expression<'src>>,
@@ -195,8 +196,31 @@ fn if_expr(input: &str) -> IResult<&str, Expression> {
     ))
 }
 
+fn cond_expr(input: &str) -> IResult<&str, Expression> {
+    // 左側の数値っぽいものをはじめに取る
+    let (input, lhs) = num_expr(input)?;
+
+    // 比較演算子があるかどうか判定
+    let (input, cond_oper) =
+        space_delimited(alt((char('<'), char('>'))))(input)?;
+
+    // 右側の数値っぽいものを取る
+    let (input, rhs) = num_expr(input)?;
+
+    let cond_expr = match cond_oper {
+        '<' => Expression::Lt(Box::new(lhs), Box::new(rhs)),
+        // 順番を変えると上位の変数を参照するときにおかしくなる可能性があるが、見なかったことにする
+        '>' => Expression::Lt(Box::new(rhs), Box::new(lhs)),
+        _ => {
+            panic!("Condition expression should have '<' or '>' operator");
+        }
+    };
+
+    Ok((input, cond_expr))
+}
+
 fn expr(input: &str) -> IResult<&str, Expression> {
-    alt((if_expr, num_expr))(input)
+    alt((if_expr, cond_expr, num_expr))(input)
 }
 
 fn var_def(input: &str) -> IResult<&str, Statement> {
@@ -358,6 +382,13 @@ fn eval(expr: &Expression, stackframe: &StackFrame) -> f64 {
         Expression::Sub(lhs, rhs) => eval(lhs, stackframe) - eval(rhs, stackframe),
         Expression::Mul(lhs, rhs) => eval(lhs, stackframe) * eval(rhs, stackframe),
         Expression::Div(lhs, rhs) => eval(lhs, stackframe) / eval(rhs, stackframe),
+        Expression::Lt(lhs, rhs) => {
+            if eval(lhs, stackframe) < eval(rhs, stackframe) {
+                1.0
+            } else {
+                0.0
+            }
+        }
         Expression::If(cond, true_case, false_case) => {
             if (eval(cond, stackframe)) != 0.0 {
                 eval(true_case, stackframe)
