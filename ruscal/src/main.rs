@@ -6,7 +6,7 @@ use nom::{
     character::complete::{alpha1, alphanumeric1, char, multispace0, multispace1},
     combinator::{opt, recognize},
     error::ParseError,
-    multi::{fold_many0, many0},
+    multi::{fold_many0, many0, separated_list0},
     number::complete::recognize_float,
     sequence::{delimited, pair, terminated},
     IResult, Parser,
@@ -39,9 +39,52 @@ enum Statement<'src> {
         end: Expression<'src>,
         stmts: Statements<'src>,
     },
+    FnDef {
+        name: &'src str,
+        args: Vec<&'src str>,
+        stmts: Statements<'src>,
+    },
 }
 
 type Statements<'a> = Vec<Statement<'a>>;
+
+#[derive(Debug, PartialEq, Clone)]
+struct UserFn<'src> {
+    args: Vec<&'src str>,
+    stmts: Statements<'src>,
+}
+
+struct NativeFn {
+    code: Box<dyn Fn(&[f64]) -> f64>,
+}
+
+impl std::fmt::Display for NativeFn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<NativeOp>")
+    }
+}
+
+enum FnDef<'src> {
+    User(UserFn<'src>),
+    Native(NativeFn),
+}
+
+impl<'src> FnDef<'src> {
+    fn call(&self, args: &[f64], stackframe: &StackFrame) -> f64 {
+        match self {
+            FnDef::User(user_fn) => {
+                let mut new_frame = StackFrame::push_stack(stackframe);
+                new_frame.vars = args
+                    .iter()
+                    .zip(user_fn.args.iter())
+                    .map(|(arg, arg_name)| (arg_name.to_string(), *arg))
+                    .collect();
+                eval_stmts(&user_fn.stmts, &mut new_frame)
+            }
+            FnDef::Native(native_fn) => (native_fn.code)(args),
+        }
+    }
+}
 
 fn space_delimited<'src, O, E, F>(f: F) -> impl FnMut(&'src str) -> IResult<&'src str, O, E>
 where
@@ -196,90 +239,162 @@ fn for_statement(input: &str) -> IResult<&str, Statement> {
     ))
 }
 
+fn fn_statement(input: &str) -> IResult<&str, Statement> {
+    let (input, _) = delimited(multispace0, tag("fn"), multispace1)(input)?;
+    let (input, fn_name) = space_delimited(identifier)(input)?;
+    let (input, _) = space_delimited(char('('))(input)?;
+    let (input, arg_names) = separated_list0(char(','), space_delimited(identifier))(input)?;
+    let (input, _) = space_delimited(char(')'))(input)?;
+    let (input, stmts) = delimited(open_brace, statements, close_brace)(input)?;
+    Ok((
+        input,
+        Statement::FnDef {
+            name: fn_name,
+            args: arg_names,
+            stmts,
+        },
+    ))
+}
+
 fn statement(i: &str) -> IResult<&str, Statement> {
     alt((
-      for_statement,
-    //   for文以外は終わりに";"が付く
-      terminated(
-        alt((var_def, var_assign, expr_statement)),
-        char(';'),
-      ),
+        for_statement,
+        fn_statement,
+        //   for文以外は終わりに";"が付く
+        terminated(alt((var_def, var_assign, expr_statement)), char(';')),
     ))(i)
-  }
+}
 
 fn statements(input: &str) -> IResult<&str, Statements> {
     let (input, stmts) = many0(statement)(input)?;
+    let (input, _) = opt(char(';'))(input)?;
     Ok((input, stmts))
 }
 
 type Variables = BTreeMap<String, f64>;
+type Functions<'src> = BTreeMap<String, FnDef<'src>>;
 
-fn unary_fn(f: fn(f64) -> f64) -> impl Fn(&[Expression], &Variables) -> f64 {
-    move |args, variables| {
-        f(eval(
-            args.iter().next().expect("function missing argument"),
-            variables,
-        ))
+struct StackFrame<'src> {
+    vars: Variables,
+    funcs: Functions<'src>,
+    uplevel: Option<&'src StackFrame<'src>>,
+}
+
+fn print(arg: f64) -> f64 {
+    println!("print: {arg}");
+    0.
+}
+
+impl<'src> StackFrame<'src> {
+    fn new() -> Self {
+        let default_funcs = vec![
+            ("sqrt", unary_fn(f64::sqrt)),
+            ("sin", unary_fn(f64::sin)),
+            ("cos", unary_fn(f64::cos)),
+            ("tan", unary_fn(f64::tan)),
+            ("asin", unary_fn(f64::atan)),
+            ("acos", unary_fn(f64::acos)),
+            ("atan", unary_fn(f64::atan)),
+            ("atan2", binary_fn(f64::atan2)),
+            ("pow", binary_fn(f64::powf)),
+            ("exp", unary_fn(f64::exp)),
+            ("log", binary_fn(f64::log)),
+            ("log10", unary_fn(f64::log10)),
+            ("print", unary_fn(print)),
+        ];
+
+        Self {
+            vars: Default::default(),
+            funcs: default_funcs
+                .into_iter()
+                .map(|(name, func)| (name.to_string(), func))
+                .collect(),
+            uplevel: None,
+        }
+    }
+
+    fn get_fn(&self, name: &str) -> Option<&FnDef<'src>> {
+        if let Some(func) = self.funcs.get(name) {
+            Some(func)
+        } else if let Some(up) = self.uplevel {
+            up.get_fn(name)
+        } else {
+            None
+        }
+    }
+
+    fn push_stack(frame: &'src StackFrame<'src>) -> Self {
+        Self {
+            uplevel: Some(frame),
+            funcs: Default::default(),
+            vars: Default::default(),
+        }
     }
 }
 
-fn binary_fn(f: fn(f64, f64) -> f64) -> impl Fn(&[Expression], &Variables) -> f64 {
-    move |args, vars| {
-        let mut args = args.iter();
-        let lhs = eval(args.next().expect("function missing first argument"), vars);
-        let rhs = eval(args.next().expect("function missing second argument"), vars);
-        f(lhs, rhs)
-    }
+fn unary_fn<'a>(f: fn(f64) -> f64) -> FnDef<'a> {
+    FnDef::Native(NativeFn {
+        code: Box::new(move |args| f(*args.iter().next().expect("function missing argument"))),
+    })
 }
 
-fn eval(expr: &Expression, vars: &Variables) -> f64 {
+fn binary_fn<'a>(f: fn(f64, f64) -> f64) -> FnDef<'a> {
+    FnDef::Native(NativeFn {
+        code: Box::new(move |args| {
+            let mut args = args.iter();
+            let lhs = args.next().expect("function missing first argument");
+            let rhs = args.next().expect("function missing second argument");
+            f(*lhs, *rhs)
+        }),
+    })
+}
+
+fn eval(expr: &Expression, stackframe: &StackFrame) -> f64 {
     match expr {
         Expression::Ident("pi") => std::f64::consts::PI,
-        Expression::Ident(ident) => *vars.get(*ident).expect("Variables not found"),
+        Expression::Ident(ident) => *stackframe.vars.get(*ident).expect("Variables not found"),
         Expression::NumLiteral(num) => *num,
-        Expression::Add(lhs, rhs) => eval(lhs, vars) + eval(rhs, vars),
-        Expression::Sub(lhs, rhs) => eval(lhs, vars) - eval(rhs, vars),
-        Expression::Mul(lhs, rhs) => eval(lhs, vars) * eval(rhs, vars),
-        Expression::Div(lhs, rhs) => eval(lhs, vars) / eval(rhs, vars),
-        Expression::FnInvoke("sqrt", args) => unary_fn(f64::sqrt)(args, vars),
-        Expression::FnInvoke("sin", args) => unary_fn(f64::sin)(args, vars),
-        Expression::FnInvoke("cos", args) => unary_fn(f64::cos)(args, vars),
-        Expression::FnInvoke("tan", args) => unary_fn(f64::tan)(args, vars),
-        Expression::FnInvoke("asin", args) => unary_fn(f64::asin)(args, vars),
-        Expression::FnInvoke("acos", args) => unary_fn(f64::acos)(args, vars),
-        Expression::FnInvoke("atan", args) => unary_fn(f64::atan)(args, vars),
-        Expression::FnInvoke("atan2", args) => binary_fn(f64::atan2)(args, vars),
-        Expression::FnInvoke("pow", args) => binary_fn(f64::powf)(args, vars),
-        Expression::FnInvoke("exp", args) => unary_fn(f64::exp)(args, vars),
-        Expression::FnInvoke("log", args) => binary_fn(f64::log)(args, vars),
-        Expression::FnInvoke("log10", args) => unary_fn(f64::log10)(args, vars),
-        Expression::FnInvoke(name, _) => panic!("Unknown function {name:?}"),
+        Expression::Add(lhs, rhs) => eval(lhs, stackframe) + eval(rhs, stackframe),
+        Expression::Sub(lhs, rhs) => eval(lhs, stackframe) - eval(rhs, stackframe),
+        Expression::Mul(lhs, rhs) => eval(lhs, stackframe) * eval(rhs, stackframe),
+        Expression::Div(lhs, rhs) => eval(lhs, stackframe) / eval(rhs, stackframe),
         Expression::If(cond, true_case, false_case) => {
-            if (eval(cond, vars)) != 0.0 {
-                eval(true_case, vars)
+            if (eval(cond, stackframe)) != 0.0 {
+                eval(true_case, stackframe)
             } else if let Some(false_case) = false_case {
-                eval(false_case, vars)
+                eval(false_case, stackframe)
             } else {
                 0.0
+            }
+        }
+        Expression::FnInvoke(name, args) => {
+            if let Some(func) = stackframe.get_fn(name) {
+                let args: Vec<_> = args.iter().map(|arg| eval(arg, stackframe)).collect();
+                func.call(&args, stackframe)
+            } else {
+                panic!("Unknown function {name:?}")
             }
         }
     }
 }
 
-fn eval_stmts(stmts: &[Statement], vars: &mut Variables) {
+fn eval_stmts<'src>(stmts: &[Statement<'src>], stackframe: &mut StackFrame<'src>) -> f64 {
+    let mut last_result = 0.0;
     for statement in stmts {
         match statement {
-            Statement::Expression(expr) => println!("eval : {:?}", eval(expr, vars)),
+            Statement::Expression(expr) => {
+                last_result = eval(expr, stackframe);
+            }
             Statement::VarDef(ident, expr) => {
-                let value = eval(expr, vars);
-                vars.insert(ident.to_string(), value);
+                let value = eval(expr, stackframe);
+                stackframe.vars.insert(ident.to_string(), value);
             }
             Statement::VarAssign(ident, expr) => {
-                if !vars.contains_key(*ident) {
+                if !stackframe.vars.contains_key(*ident) {
                     panic!("Variables is not found")
                 }
-                let value = eval(expr, vars);
-                vars.insert(ident.to_string(), value);
+                let value = eval(expr, stackframe);
+                stackframe.vars.insert(ident.to_string(), value);
             }
             Statement::For {
                 loop_var,
@@ -287,30 +402,40 @@ fn eval_stmts(stmts: &[Statement], vars: &mut Variables) {
                 end,
                 stmts,
             } => {
-                let start = eval(start, vars) as i32;
-                let end = eval(end, vars) as i32;
+                let start = eval(start, stackframe) as i32;
+                let end = eval(end, stackframe) as i32;
                 for i in start..end {
-                    vars.insert(loop_var.to_string(), i.into());
-                    eval_stmts(stmts, vars);
+                    stackframe.vars.insert(loop_var.to_string(), i.into());
+                    eval_stmts(stmts, stackframe);
                 }
+            }
+            Statement::FnDef { name, args, stmts } => {
+                stackframe.funcs.insert(
+                    name.to_string(),
+                    FnDef::User(UserFn {
+                        args: args.clone(),
+                        stmts: stmts.clone(),
+                    }),
+                );
             }
         }
     }
+    last_result
 }
 
 fn main() {
     let mut buf = String::new();
-    let mut variables = BTreeMap::new();
+    let mut stackframe = StackFrame::new();
     if std::io::stdin().read_to_string(&mut buf).is_ok() {
-        let (_, parsed_statements) = match statements(&buf) {
+        let (rest, parsed_statements) = match statements(&buf) {
             Ok(parsed) => parsed,
             Err(e) => {
                 eprintln!("Parsed error: {e:?}");
                 return;
             }
         };
-        dbg!(&parsed_statements);
-        eval_stmts(&parsed_statements, &mut variables);
+        dbg!(rest, &parsed_statements);
+        eval_stmts(&parsed_statements, &mut stackframe);
     }
 }
 
